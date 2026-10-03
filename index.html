@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 安全対策：読み込んでよいスクリプトの場所を限定し、紛れ込んだスクリプトが動かないようにする -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https: wss:; frame-src https://*.firebaseapp.com https://*.web.app https://*.google.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>MEGURU</title>
+<meta name="description" content="くりかえすTODOと1回きりのTODOを、サイクルと場所で管理するアプリ">
+<meta name="theme-color" content="#34548f">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="icon" type="image/png" sizes="48x48" href="icons/favicon-48.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css?v=2026.10.03-1">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- Header -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1 class="brand">
+        <img class="brand-mark" src="icons/icon.svg" alt="" width="30" height="30">
+        <span class="brand-name">MEGURU</span>
+        <span class="brand-sub">めぐる</span>
+      </h1>
+      <div class="sync-status" id="syncStatus" title="同期状態">
+        <span class="dot" id="syncDot"></span>
+        <span id="syncLabel">未接続</span>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="today">今やること<span class="tab-count" id="countToday"></span></button>
+      <button class="tab" data-tab="upcoming">これから</button>
+      <button class="tab" data-tab="all">すべて</button>
+      <button class="tab" data-tab="settings">設定</button>
+    </nav>
+  </header>
+
+  <main class="content">
+
+    <!-- TODAY VIEW -->
+    <section class="panel" id="panel-today">
+      <div class="panel-head panel-head-row">
+        <div>
+          <h2>今やること</h2>
+          <p class="hint">期限が来た・まもなくのTODOをまとめて表示します。</p>
+        </div>
+        <button class="btn btn-primary" data-open-add>＋ 追加</button>
+      </div>
+      <div class="done-today" id="doneToday" hidden></div>
+      <div class="place-filter" data-place-filter></div>
+      <div id="todayList" class="item-list"></div>
+      <div id="todayEmpty" class="empty-state" hidden>
+        <p>今やることはありません。おつかれさまでした。</p>
+      </div>
+    </section>
+
+    <!-- UPCOMING VIEW -->
+    <section class="panel" id="panel-upcoming" hidden>
+      <div class="panel-head">
+        <h2>これから</h2>
+        <p class="hint">「今やること」に入っていないTODOを、予定日が近い順に並べています。先取りして済ませてもOKです。</p>
+      </div>
+      <div class="place-filter" data-place-filter></div>
+      <div id="upcomingGroups"></div>
+      <div id="upcomingEmpty" class="empty-state" hidden>
+        <p>この先の予定はありません。</p>
+      </div>
+    </section>
+
+    <!-- ALL VIEW -->
+    <section class="panel" id="panel-all" hidden>
+      <div class="panel-head panel-head-row">
+        <div>
+          <h2>すべてのTODO</h2>
+          <p class="hint">登録済みのTODOの一覧です。</p>
+        </div>
+        <button class="btn btn-primary" data-open-add>＋ TODOを追加</button>
+      </div>
+      <div class="filter-row">
+        <input type="text" id="searchBox" placeholder="名前・メモで検索" class="input">
+        <select id="categoryFilter" class="input select" aria-label="カテゴリで絞り込み"></select>
+        <select id="placeFilterAll" class="input select" aria-label="場所で絞り込み"></select>
+        <select id="kindFilter" class="input select" aria-label="種類で絞り込み">
+          <option value="">すべての種類</option>
+          <option value="repeat">くりかえし</option>
+          <option value="once">1回きり</option>
+        </select>
+      </div>
+      <div id="allList" class="item-list"></div>
+      <div id="allEmpty" class="empty-state" hidden>
+        <p>まだTODOが登録されていません。「＋ TODOを追加」から始めましょう。</p>
+      </div>
+
+      <details class="done-section" id="doneSection" hidden>
+        <summary>完了した1回きりのTODO（<span id="doneCount">0</span>件）</summary>
+        <div id="doneList" class="done-list"></div>
+        <button class="btn btn-danger btn-small" id="btnClearDone">完了済みをすべて削除</button>
+      </details>
+    </section>
+
+    <!-- SETTINGS VIEW -->
+    <section class="panel" id="panel-settings" hidden>
+      <div class="panel-head">
+        <h2>設定</h2>
+        <p class="hint">同期・カテゴリ・場所・リマインドの設定です。</p>
+      </div>
+
+      <div class="card settings-card">
+        <h3>1. 同期方法</h3>
+        <div class="radio-row">
+          <label class="radio-option">
+            <input type="radio" name="syncMode" value="local" id="modeLocal">
+            <span>この端末のみ（同期しない）</span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="syncMode" value="cloud" id="modeCloud">
+            <span>クラウド同期する（スマホ・PC共有）</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card settings-card" id="cloudSettings" hidden>
+        <div class="quick-connect">
+          <h3>接続用リンクをお持ちの場合</h3>
+          <p class="hint">同期済みの端末で表示した「接続用リンク」を貼り付けて「接続」を押すと、下の2と3を入力しなくても接続できます。</p>
+          <div class="row-inline">
+            <input type="text" id="setupLinkInput" class="input quick-input" placeholder="https://...#setup=..." autocomplete="off">
+            <button class="btn btn-primary" id="btnQuickConnect">接続</button>
+          </div>
+        </div>
+
+        <h3>2. Firebase 接続情報</h3>
+        <p class="hint">Firebaseコンソールの「プロジェクトの設定」→「マイアプリ」に表示される <code>const firebaseConfig = { ... };</code> の部分を、コピーしたまま貼り付けてください（書き換えは不要です）。日用品ストック管理と同じFirebaseプロジェクトを使うこともできます。</p>
+        <textarea id="firebaseConfig" class="input textarea" rows="8" placeholder="const firebaseConfig = {&#10;  apiKey: &quot;...&quot;,&#10;  authDomain: &quot;...&quot;,&#10;  projectId: &quot;...&quot;,&#10;  storageBucket: &quot;...&quot;,&#10;  messagingSenderId: &quot;...&quot;,&#10;  appId: &quot;...&quot;&#10;};"></textarea>
+
+        <h3>3. 共有コード</h3>
+        <p class="hint">同じコードを入力した端末同士でデータが共有されます。長めのランダムな文字列を推奨します。</p>
+        <div class="row-inline">
+          <input type="text" id="syncCode" class="input" placeholder="例: meguru-8k2x-...">
+          <button class="btn btn-secondary" id="btnGenCode">コード生成</button>
+        </div>
+
+        <div class="row-inline" style="margin-top:16px;">
+          <button class="btn btn-primary" id="btnConnect">保存して接続</button>
+        </div>
+        <p id="connectResult" class="connect-result" hidden></p>
+      </div>
+
+      <div class="card settings-card" id="shareCard" hidden>
+        <h3>他の端末を追加する</h3>
+        <p class="hint">新しいスマホやPCを同期に加えるための、接続用リンクとQRコードを表示します。</p>
+        <button class="btn btn-secondary" id="btnShowShare">接続用リンクとQRコードを表示</button>
+        <div id="sharePanel" hidden>
+          <p class="share-warning">このリンクとQRコードには共有コードが含まれています。同期したい人にだけ渡し、SNSなどには載せないでください。</p>
+          <div id="qrBox" class="qr-box" aria-label="接続用QRコード"></div>
+          <div class="row-inline">
+            <input type="text" id="setupLinkOutput" class="input quick-input" readonly>
+            <button class="btn btn-primary" id="btnCopyLink">リンクをコピー</button>
+          </div>
+          <p class="hint share-note">iPhoneで「ホーム画面に追加」したアプリを使う場合：QRコードをカメラで読むとSafariで開いてしまうため、リンクをコピーして、ホーム画面のアプリの「設定」→「接続用リンクをお持ちの場合」に貼り付けてください。</p>
+          <button class="btn btn-secondary" id="btnHideShare">閉じる</button>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>カテゴリ管理</h3>
+        <p class="hint">TODOの分類です。自由に追加・削除できます。クラウド同期中は、すべての端末で共通になります。</p>
+        <div class="row-inline">
+          <input type="text" id="newCategory" class="input grow" placeholder="新しいカテゴリ名" maxlength="50">
+          <button class="btn btn-secondary" id="btnAddCategory">追加</button>
+        </div>
+        <div id="categoryChips" class="chip-list"></div>
+      </div>
+
+      <div class="card settings-card">
+        <h3>場所の管理</h3>
+        <p class="hint">TODOをやる場所です（例：自宅、会社、車）。「今やること」「これから」で場所ごとに絞り込めます。クラウド同期中は、すべての端末で共通になります。</p>
+        <div class="row-inline">
+          <input type="text" id="newPlace" class="input grow" placeholder="新しい場所の名前" maxlength="50">
+          <button class="btn btn-secondary" id="btnAddPlace">追加</button>
+        </div>
+        <div id="placeChips" class="chip-list"></div>
+      </div>
+
+      <div class="card settings-card" id="reminderCard">
+        <h3>リマインド（カレンダーで毎日お知らせ）</h3>
+        <p class="hint">毎日決まった時刻に「今やること」を確認する予定を、カレンダーに登録します。予定の通知や予定の中のリンクから、アプリの「今やること」を直接開けます。</p>
+        <div class="row-inline">
+          <label for="remindTime">お知らせの時刻</label>
+          <input type="time" id="remindTime" class="input time-input" value="08:00">
+        </div>
+        <div class="row-inline reminder-buttons">
+          <button class="btn btn-primary" id="btnGoogleCal">Googleカレンダーに登録</button>
+          <button class="btn btn-secondary" id="btnIcs">iPhone・その他のカレンダー用</button>
+        </div>
+        <p class="hint">Googleカレンダーの場合、予定を保存する前に通知を「予定の時刻」（0分前）にすると、その時刻ちょうどに通知が届きます。「iPhone・その他」はカレンダー用ファイル（.ics）を作ります。開くとカレンダーに追加でき、時刻ちょうどの通知も設定済みです。</p>
+      </div>
+
+      <div class="card settings-card">
+        <h3>まもなくの判定基準</h3>
+        <p class="hint">クラウド同期中は、すべての端末で共通になります。</p>
+        <div class="row-inline">
+          <label for="warnDays">予定日まで残り</label>
+          <input type="number" id="warnDays" class="input" style="width:80px" min="0" max="30" value="2">
+          <label for="warnDays">日以内を「今やること」に表示</label>
+        </div>
+        <label class="radio-option" style="margin-top:12px;">
+          <input type="checkbox" id="showNoDate">
+          <span>期限なしの1回きりTODOも「今やること」に表示する</span>
+        </label>
+      </div>
+
+      <div class="card settings-card danger-card">
+        <h3>データ管理</h3>
+        <div class="row-inline">
+          <button class="btn btn-secondary" id="btnExport">データをエクスポート</button>
+          <button class="btn btn-secondary" id="btnImport">インポート</button>
+          <input type="file" id="importFile" accept="application/json" hidden>
+        </div>
+      </div>
+
+      <p class="app-version">MEGURU バージョン：<span id="appVersion"></span></p>
+
+    </section>
+
+  </main>
+
+  <!-- ADD/EDIT TASK MODAL -->
+  <div class="modal-overlay" id="taskModalOverlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <h3 id="modalTitle">TODOを追加</h3>
+        <button class="icon-btn" id="btnCloseModal" aria-label="閉じる">✕</button>
+      </div>
+      <form id="taskForm" class="modal-body">
+        <input type="hidden" id="taskId">
+
+        <label class="field">
+          <span>やること <span class="required">*</span></span>
+          <input type="text" id="taskName" class="input" required maxlength="100" placeholder="例：エアコンのフィルター掃除">
+        </label>
+
+        <!-- サムネイル -->
+        <div class="field">
+          <span>サムネイル</span>
+          <div class="thumb-editor">
+            <div class="thumb-preview" id="thumbPreview"></div>
+            <div class="thumb-editor-side">
+              <div class="seg" role="radiogroup" aria-label="サムネイルの種類">
+                <label><input type="radio" name="thumbType" value="icon" checked><span>アイコン</span></label>
+                <label><input type="radio" name="thumbType" value="upload"><span>写真</span></label>
+              </div>
+              <div id="colorRow" class="color-row" role="radiogroup" aria-label="アイコンの色"></div>
+            </div>
+          </div>
+          <div id="iconPickerBox">
+            <div id="iconPicker" class="icon-picker"></div>
+          </div>
+          <div id="imageUploadBox" hidden>
+            <input type="file" id="taskImageFile" accept="image/*" hidden>
+            <div class="row-inline">
+              <button type="button" class="btn btn-secondary" id="btnPickPhoto">写真を撮る／選ぶ</button>
+              <button type="button" class="btn btn-danger btn-small" id="btnClearPhoto" hidden>写真を外す</button>
+            </div>
+            <div class="hint">スマホではカメラで撮るか、写真ライブラリから選べます。写真は小さく縮小して保存するので、同期中の他の端末にも表示されます。一覧でタップすると大きく表示します。</div>
+          </div>
+        </div>
+
+        <!-- 種類 -->
+        <div class="field">
+          <span>種類</span>
+          <div class="seg seg-wide" role="radiogroup" aria-label="TODOの種類">
+            <label><input type="radio" name="taskKind" value="repeat" checked><span>🔁 くりかえし</span></label>
+            <label><input type="radio" name="taskKind" value="once"><span>📌 1回きり</span></label>
+          </div>
+        </div>
+
+        <!-- くりかえし -->
+        <div id="repeatBox" class="kind-box">
+          <div class="field">
+            <span>くりかえす間隔 <span class="required">*</span></span>
+            <div class="row-inline">
+              <input type="number" id="taskInterval" class="input interval-input" min="1" max="999" value="1">
+              <select id="taskUnit" class="input select unit-select">
+                <option value="day">日ごと</option>
+                <option value="week" selected>週ごと</option>
+                <option value="month">か月ごと</option>
+                <option value="year">年ごと</option>
+              </select>
+            </div>
+            <div class="preset-row" id="presetRow">
+              <button type="button" class="preset" data-v="1" data-u="day">毎日</button>
+              <button type="button" class="preset" data-v="1" data-u="week">毎週</button>
+              <button type="button" class="preset" data-v="2" data-u="week">2週間</button>
+              <button type="button" class="preset" data-v="1" data-u="month">毎月</button>
+              <button type="button" class="preset" data-v="3" data-u="month">3か月</button>
+              <button type="button" class="preset" data-v="6" data-u="month">半年</button>
+              <button type="button" class="preset" data-v="1" data-u="year">毎年</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="taskLastDone">前回やった日</label>
+            <input type="date" id="taskLastDone" class="input">
+            <div class="history-box">
+              <div class="ph-title">これまでにやった日（前回より前、過去4回まで）</div>
+              <ul id="historyList" class="history-list"></ul>
+              <p id="historyEmpty" class="hint">まだ記録はありません。一覧の「やった」を押すたびに記録されます。</p>
+              <div class="avg-row">
+                <span id="avgText" class="avg-text"></span>
+                <button type="button" class="btn btn-secondary btn-small" id="btnApplyAvg" hidden>間隔に反映</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="field">
+            <span>次回の予定日</span>
+            <p id="nextAutoText" class="next-auto"></p>
+            <label class="check-line"><input type="checkbox" id="useNextOverride"><span>次回の日付を自分で決める（延期・前倒し）</span></label>
+            <input type="date" id="taskNextOverride" class="input" hidden>
+          </div>
+        </div>
+
+        <!-- 1回きり -->
+        <div id="onceBox" class="kind-box" hidden>
+          <label class="field">
+            <span>期限（任意）</span>
+            <input type="date" id="taskDue" class="input">
+            <span class="hint">空のままにすると「期限なし」になります。</span>
+          </label>
+        </div>
+
+        <div class="field-row">
+          <label class="field">
+            <span>カテゴリ</span>
+            <select id="taskCategory" class="input select"></select>
+          </label>
+          <label class="field">
+            <span>場所</span>
+            <select id="taskPlace" class="input select"></select>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>メモ</span>
+          <textarea id="taskMemo" class="input memo-input" rows="2" maxlength="500" placeholder="手順・型番・注意点など（任意）"></textarea>
+        </label>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-danger" id="btnDeleteTask" hidden>削除</button>
+          <div class="spacer"></div>
+          <button type="button" class="btn btn-secondary" id="btnCancelTask">キャンセル</button>
+          <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- POSTPONE SHEET -->
+  <div class="modal-overlay" id="postponeOverlay" hidden>
+    <div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="postponeTitle">
+      <div class="modal-head">
+        <h3 id="postponeTitle">延期する</h3>
+        <button class="icon-btn" id="btnClosePostpone" aria-label="閉じる">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="hint" id="postponeTarget"></p>
+        <div class="postpone-grid">
+          <button type="button" class="btn btn-secondary" data-postpone="1">明日</button>
+          <button type="button" class="btn btn-secondary" data-postpone="3">3日後</button>
+          <button type="button" class="btn btn-secondary" data-postpone="7">1週間後</button>
+          <button type="button" class="btn btn-secondary" data-postpone="weekend">次の土曜</button>
+        </div>
+        <div class="row-inline">
+          <input type="date" id="postponeDate" class="input grow" aria-label="日付を指定">
+          <button type="button" class="btn btn-primary" id="btnPostponeDate">この日にする</button>
+        </div>
+        <p class="hint">くりかえしのTODOは、今回の予定日だけが変わります。「やった」を押すと、次からは元の間隔に戻ります。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- PHOTO VIEWER -->
+  <div class="photo-viewer" id="photoViewer" hidden>
+    <img id="photoViewerImg" alt="">
+    <p id="photoViewerCaption"></p>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast" hidden><span id="toastMsg"></span><button type="button" id="toastAction" class="toast-action" hidden>元に戻す</button></div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="qrcode.js?v=2026.10.03-1"></script>
+<script src="icons.js?v=2026.10.03-1"></script>
+<script src="app.js?v=2026.10.03-1"></script>
+</body>
+</html>
