@@ -15,7 +15,7 @@ const LOCAL_TASKS_KEY = "meguru_tasks_local_v1";
 const CLOUD_ROOT = "meguru";              // Firestore: meguru/{共有コード}/tasks/{id}
 
 // アプリのバージョン（更新のたびに index.html の ?v= と合わせて変える）
-const APP_VERSION = "2026.10.03-1";
+const APP_VERSION = "2026.10.06-1";
 const SETUP_PARAM = "setup=";
 
 const state = {
@@ -604,6 +604,13 @@ function statusLabel(st) {
   return `あと${d}日`;
 }
 
+// 今日「やった」を押したもの（くりかえし：前回やった日が今日／1回きり：今日完了）
+function isDoneToday(task) {
+  const today = todayStr();
+  if (task.kind === "once") return task.done && task.doneAt === today;
+  return task.lastDone === today;
+}
+
 function isInToday(task, st) {
   if (st.status === "due" || st.status === "soon") return true;
   return st.status === "nodate" && state.settings.showNoDate;
@@ -627,14 +634,17 @@ function thumbHtml(task, st) {
   return `<div class="thumb-ring ${ringCls}" style="--p:${p}">${inner}</div>`;
 }
 
-function taskCardHtml(task) {
+function taskCardHtml(task, opts = {}) {
   const st = computeStatus(task);
-  const cardClass = st.status === "due" ? "overdue" : (st.status === "soon" ? "urgent" : "");
+  const doneToday = !!opts.doneToday;
+  const cardClass = doneToday ? "is-done-today" : (st.status === "due" ? "overdue" : (st.status === "soon" ? "urgent" : ""));
   const kindText = task.kind === "repeat"
     ? `<span class="kind-pill repeat">🔁 ${escapeHtml(intervalLabel(task.interval, task.unit))}</span>`
     : `<span class="kind-pill once">📌 1回きり</span>`;
   let meta;
-  if (task.kind === "repeat") {
+  if (doneToday) {
+    meta = task.kind === "repeat" ? `今日やりました → 次回 ${dispDate(st.due)}` : "今日完了しました";
+  } else if (task.kind === "repeat") {
     meta = `前回 ${task.lastDone ? dispDate(task.lastDone) : "未記録"} → 次回 ${dispDate(st.due)}${task.nextOverride ? '<span class="moved">（日付変更）</span>' : ""}`;
   } else {
     meta = st.due ? `期限 ${dispDate(st.due)}` : "期限なし";
@@ -653,15 +663,18 @@ function taskCardHtml(task) {
           ${task.place ? `<span class="item-place">📍${escapeHtml(task.place)}</span>` : ""}
         </div>
       </div>
-      <span class="status-badge ${st.status}">${statusLabel(st)}</span>
+      <span class="status-badge ${doneToday ? "done-today-badge" : st.status}">${doneToday ? "✓ 今日は完了" : statusLabel(st)}</span>
     </div>
     <div class="item-meta">${meta}</div>
-    ${memoLine}
-    <div class="item-actions">
+    ${doneToday ? "" : memoLine}
+    ${doneToday ? `<div class="item-actions">
+      <button class="btn btn-secondary" data-action="undoToday" data-id="${escapeHtml(task.id)}">↩ 取り消す</button>
+      <button class="btn btn-secondary" data-action="edit" data-id="${escapeHtml(task.id)}">編集</button>
+    </div>` : `<div class="item-actions">
       <button class="btn btn-primary" data-action="done" data-id="${escapeHtml(task.id)}">✓ やった</button>
       <button class="btn btn-secondary" data-action="postpone" data-id="${escapeHtml(task.id)}">延期</button>
       <button class="btn btn-secondary" data-action="edit" data-id="${escapeHtml(task.id)}">編集</button>
-    </div>
+    </div>`}
   </div>`;
 }
 
@@ -689,7 +702,8 @@ function render() {
   const active = state.tasks.filter((t) => !(t.kind === "once" && t.done)).map((t) => ({ task: t, st: computeStatus(t) }));
 
   // 今やること
-  const todayAll = active.filter((x) => isInToday(x.task, x.st));
+  // 今日やったものは、今日のうちは下にグレーで表示（日付が変わると元の場所に戻る）
+  const todayAll = active.filter((x) => !isDoneToday(x.task) && isInToday(x.task, x.st));
   const rank = { due: 0, soon: 1, nodate: 2 };
   const todayItems = todayAll.filter((x) => placeMatches(x.task)).sort((a, b) => {
     if (rank[a.st.status] !== rank[b.st.status]) return rank[a.st.status] - rank[b.st.status];
@@ -697,19 +711,20 @@ function render() {
   });
   document.getElementById("todayList").innerHTML = todayItems.map((x) => taskCardHtml(x.task)).join("");
   document.getElementById("todayEmpty").hidden = todayItems.length > 0;
+  const doneTodayTasks = state.tasks.filter(isDoneToday);
+  const doneTodayShown = doneTodayTasks.filter(placeMatches)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   document.getElementById("todayEmpty").querySelector("p").textContent = todayAll.length && !todayItems.length
-    ? "この場所で今やることはありません。" : "今やることはありません。おつかれさまでした。";
+    ? "この場所で今やることはありません。"
+    : (doneTodayTasks.length ? "今日やることはすべて完了しました。おつかれさまでした。" : "今やることはありません。おつかれさまでした。");
+  document.getElementById("todayDoneWrap").hidden = doneTodayShown.length === 0;
+  document.getElementById("todayDoneCount").textContent = `${doneTodayShown.length}件`;
+  document.getElementById("todayDoneList").innerHTML = doneTodayShown.map((t) => taskCardHtml(t, { doneToday: true })).join("");
   document.getElementById("countToday").textContent = todayAll.length ? String(todayAll.length) : "";
 
-  // 今日やった件数
-  const today = todayStr();
-  const doneToday = state.tasks.filter((t) => (t.kind === "repeat" && t.lastDone === today) || (t.kind === "once" && t.done && t.doneAt === today)).length;
-  const dt = document.getElementById("doneToday");
-  dt.hidden = doneToday === 0;
-  dt.textContent = `今日やったこと：${doneToday}件`;
 
   // これから
-  const upcoming = active.filter((x) => !isInToday(x.task, x.st) && placeMatches(x.task)).sort(sortByDue);
+  const upcoming = active.filter((x) => !isDoneToday(x.task) && !isInToday(x.task, x.st) && placeMatches(x.task)).sort(sortByDue);
   const groups = [
     { label: "1週間以内", items: [] },
     { label: "1か月以内", items: [] },
@@ -843,6 +858,20 @@ async function markDone(task) {
   }
 }
 
+// 「今日は完了」を取り消す（押し間違え・やっぱりまだ、のとき）
+async function undoDoneToday(task) {
+  let updated;
+  if (task.kind === "once") {
+    updated = { ...task, done: false, doneAt: null, updatedAt: Date.now() };
+  } else {
+    const today = todayStr();
+    const hist = task.history.filter((d) => d < today).sort();
+    const prev = hist.length ? hist[hist.length - 1] : null;
+    updated = { ...task, lastDone: prev, history: hist.filter((d) => d !== prev), updatedAt: Date.now() };
+  }
+  if (await upsertTask(updated)) showToast(`「${task.name}」を未完了に戻しました`);
+}
+
 let postponeId = null;
 
 function openPostpone(task) {
@@ -888,6 +917,7 @@ function handleListClick(e) {
     else if (action === "postpone") openPostpone(task);
     else if (action === "edit") openEditModal(task.id);
     else if (action === "photo") openPhotoViewer(task);
+    else if (action === "undoToday") undoDoneToday(task);
     else if (action === "undone") {
       upsertTask({ ...task, done: false, doneAt: null, updatedAt: Date.now() }).then((ok) => ok && showToast("未完了に戻しました"));
     } else if (action === "remove") {
@@ -1679,7 +1709,7 @@ function initGeneralUI() {
   document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
   document.querySelectorAll("[data-open-add]").forEach((b) => b.addEventListener("click", openAddModal));
 
-  ["todayList", "upcomingGroups", "allList", "doneList"].forEach((id) => {
+  ["todayList", "todayDoneList", "upcomingGroups", "allList", "doneList"].forEach((id) => {
     document.getElementById(id).addEventListener("click", handleListClick);
   });
 

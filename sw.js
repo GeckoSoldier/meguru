@@ -4,7 +4,7 @@
    ・オフラインのときだけ、保存しておいたファイルで表示します。
    ・index.html は app.js などを「app.js?v=バージョン」の形で読むので、
      古い app.js と新しい index.html が混ざることもありません。 */
-const CACHE_NAME = "meguru-cache-v1";
+const CACHE_NAME = "meguru-cache-v2";
 const CORE_ASSETS = [
   "./",
   "./index.html",
